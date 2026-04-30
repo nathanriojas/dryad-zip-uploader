@@ -12,7 +12,7 @@ cp .env.example .env
 
 python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 
-python scripts/create_dataset_and_upload_zips.py
+python scripts/upload_zips.py
 ```
 
 ---
@@ -114,7 +114,7 @@ DRY_RUN=true
 Run:
 
 ```bash
-python scripts/create_dataset_and_upload_zips.py
+python scripts/upload_zips.py
 ```
 
 ---
@@ -130,7 +130,7 @@ DRY_RUN=false
 Then run:
 
 ```bash
-python scripts/create_dataset_and_upload_zips.py
+python scripts/upload_zips.py
 ```
 
 ---

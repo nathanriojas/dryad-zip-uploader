@@ -56,7 +56,7 @@ project-root/
 │   └── client.py                # API client (auth, upload, list files)
 │
 ├── scripts/
-│   └── create_dataset_and_upload_zips.py   # Main script
+│   └── upload_zips.py   # Main script
 │
 ├── data/                        # Input zip files
 ├── logs/                        # Runtime logs
@@ -241,7 +241,7 @@ Important:
 An AI should:
 
 - Treat `client.py` as the API abstraction layer
-- Treat `create_dataset_and_upload_zips.py` as orchestration
+- Treat `upload_zips.py` as orchestration
 - Never modify upload logic without preserving:
   - Content-Length
   - raw binary upload
