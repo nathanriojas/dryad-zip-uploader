@@ -1,7 +1,8 @@
 import mimetypes
+import time
 from pathlib import Path
 from urllib.parse import quote
-import time
+
 import requests
 from tqdm import tqdm
 
@@ -35,8 +36,8 @@ class DryadClient:
         self.token = None
 
     def authenticate(self) -> str:
-        max_auth_retries = 5
-        retry_delay_seconds = 15
+        max_auth_retries = 3
+        retry_delay_seconds = 5
 
         for attempt in range(1, max_auth_retries + 1):
             response = requests.post(
@@ -137,29 +138,33 @@ class DryadClient:
         dataset_identifier: str,
         file_path: str,
         description: str | None = None,
+        mime_type: str | None = None,
     ) -> dict:
         path = Path(file_path)
 
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
+        if not path.is_file():
+            raise ValueError(f"Path is not a file: {file_path}")
+
         file_size = path.stat().st_size
         filename_encoded = quote(path.name, safe="")
-        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         dataset_identifier_encoded = self._encode_dataset_identifier(dataset_identifier)
+
+        if mime_type is None:
+            mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
         upload_url = (
             f"{self.base_url}/api/v2/datasets/"
             f"{dataset_identifier_encoded}/files/{filename_encoded}"
         )
 
-        headers = self._headers(content_type=content_type)
+        headers = self._headers(content_type=mime_type)
         headers["Content-Length"] = str(file_size)
 
         if description:
             headers["Content-Description"] = description
-
-        # print("Upload URL:", upload_url)
 
         with path.open("rb") as f:
             progress_file = ProgressFileReader(

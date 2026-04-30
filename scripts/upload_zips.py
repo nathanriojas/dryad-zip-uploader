@@ -1,6 +1,7 @@
 import csv
 import json
 import logging
+import mimetypes
 import os
 import sys
 import time
@@ -67,23 +68,38 @@ def file_signature(path: Path) -> dict:
     }
 
 
-def validate_zip_files(zip_files: list[Path]) -> None:
-    if not zip_files:
-        raise FileNotFoundError(f"No .zip files found in {data_dir}")
+def detect_mime_type(path: Path) -> str:
+    mime_type, _ = mimetypes.guess_type(path.name)
+    return mime_type or "application/octet-stream"
+
+
+def discover_files() -> list[Path]:
+    if not data_dir.exists():
+        raise FileNotFoundError(f"Data directory does not exist: {data_dir}")
+
+    return sorted([path for path in data_dir.iterdir() if path.is_file()])
+
+
+def validate_files(files: list[Path]) -> None:
+    if not files:
+        raise FileNotFoundError(f"No files found in {data_dir}")
 
     seen = set()
 
-    for path in zip_files:
+    for path in files:
+        if not path.exists():
+            raise FileNotFoundError(f"File does not exist: {path}")
+
+        if not path.is_file():
+            raise ValueError(f"Not a file: {path}")
+
+        if path.stat().st_size <= 0:
+            raise ValueError(f"Empty file found: {path}")
+
         if path.name in seen:
             raise ValueError(f"Duplicate filename found: {path.name}")
 
         seen.add(path.name)
-
-        if path.suffix.lower() != ".zip":
-            raise ValueError(f"Not a zip file: {path}")
-
-        if path.stat().st_size <= 0:
-            raise ValueError(f"Empty zip file found: {path}")
 
 
 def write_csv_report(rows: list[dict]) -> Path:
@@ -95,6 +111,7 @@ def write_csv_report(rows: list[dict]) -> Path:
         "status",
         "size_bytes",
         "size_gb",
+        "mime_type",
         "uploaded_at",
         "error",
     ]
@@ -112,7 +129,9 @@ def should_skip_file(path: Path, manifest: dict, remote_file_names: set[str]) ->
 
     if path.name in remote_file_names:
         if ALLOW_EXISTING_REMOTE_FILES:
-            logging.info(f"Remote file exists but ALLOW_EXISTING_REMOTE_FILES=true; attempting upload: {path.name}")
+            logging.info(
+                f"Remote file exists but ALLOW_EXISTING_REMOTE_FILES=true; attempting upload: {path.name}"
+            )
             return False
 
         logging.info(f"Skipping {path.name}; already exists remotely.")
@@ -127,22 +146,34 @@ def should_skip_file(path: Path, manifest: dict, remote_file_names: set[str]) ->
     return False
 
 
-def upload_with_retries(client: DryadClient, dataset_identifier: str, zip_file: Path) -> dict:
+def upload_with_retries(
+    client: DryadClient,
+    dataset_identifier: str,
+    file_path: Path,
+) -> dict:
     last_error = None
+    mime_type = detect_mime_type(file_path)
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            logging.info(f"Upload attempt {attempt}/{MAX_RETRIES}: {zip_file.name}")
+            logging.info(f"Upload attempt {attempt}/{MAX_RETRIES}: {file_path.name}")
 
             return client.upload_file(
                 dataset_identifier=dataset_identifier,
-                file_path=str(zip_file),
-                description=f"Uploaded file: {zip_file.name}",
+                file_path=str(file_path),
+                description=f"Uploaded file: {file_path.name}",
+                mime_type=mime_type,
             )
 
         except Exception as e:
             last_error = e
-            logging.exception(f"Upload failed on attempt {attempt}: {zip_file.name}")
+            logging.exception(f"Upload failed on attempt {attempt}: {file_path.name}")
+
+            if "404 Client Error" in str(e):
+                logging.error(
+                    "404 usually means the dataset identifier/path was not found. Not retrying."
+                )
+                raise
 
             if attempt < MAX_RETRIES:
                 logging.info(f"Retrying in {RETRY_DELAY_SECONDS} seconds...")
@@ -154,23 +185,26 @@ def upload_with_retries(client: DryadClient, dataset_identifier: str, zip_file: 
 with open(metadata_path, "r", encoding="utf-8") as f:
     metadata = json.load(f)
 
-zip_files = sorted(data_dir.glob("*.zip"))
-validate_zip_files(zip_files)
+files = discover_files()
+validate_files(files)
 
-total_size_bytes = sum(path.stat().st_size for path in zip_files)
-total_size_gb = total_size_bytes / (1024 ** 3)
+total_size_bytes = sum(path.stat().st_size for path in files)
+total_size_gb = total_size_bytes / (1024**3)
 
 logging.info("")
 logging.info("====================================")
 logging.info("Upload plan")
 logging.info("====================================")
-logging.info(f"Zip files found: {len(zip_files)}")
+logging.info(f"Files found: {len(files)}")
 logging.info(f"Total size: {total_size_gb:.4f} GB")
 logging.info(f"Dry run: {DRY_RUN}")
 logging.info(f"Use existing dataset: {USE_EXISTING_DATASET}")
 
-for path in zip_files:
-    logging.info(f" - {path.name} ({path.stat().st_size / (1024 ** 3):.4f} GB)")
+for path in files:
+    logging.info(
+        f" - {path.name} "
+        f"({path.stat().st_size / (1024**3):.4f} GB, {detect_mime_type(path)})"
+    )
 
 if DRY_RUN:
     logging.info("")
@@ -196,7 +230,9 @@ logging.info("Authenticated successfully")
 
 if USE_EXISTING_DATASET:
     if not EXISTING_DATASET_IDENTIFIER:
-        raise ValueError("EXISTING_DATASET_IDENTIFIER is required when USE_EXISTING_DATASET=true")
+        raise ValueError(
+            "EXISTING_DATASET_IDENTIFIER is required when USE_EXISTING_DATASET=true"
+        )
 
     dataset_identifier = EXISTING_DATASET_IDENTIFIER
 
@@ -231,41 +267,47 @@ skipped_files = []
 failed_files = []
 report_rows = []
 
-for zip_file in zip_files:
-    sig = file_signature(zip_file)
-    size_gb = sig["size"] / (1024 ** 3)
+for file_path in files:
+    sig = file_signature(file_path)
+    size_gb = sig["size"] / (1024**3)
+    mime_type = detect_mime_type(file_path)
 
     logging.info("")
     logging.info("------------------------------")
-    logging.info(f"File: {zip_file.name}")
+    logging.info(f"File: {file_path.name}")
     logging.info(f"Size: {size_gb:.4f} GB")
+    logging.info(f"MIME type: {mime_type}")
     logging.info("------------------------------")
 
-    if should_skip_file(zip_file, manifest, remote_file_names):
-        skipped_files.append(zip_file.name)
-        report_rows.append({
-            "filename": zip_file.name,
-            "status": "skipped",
-            "size_bytes": sig["size"],
-            "size_gb": f"{size_gb:.4f}",
-            "uploaded_at": "",
-            "error": "Already uploaded or exists remotely",
-        })
+    if should_skip_file(file_path, manifest, remote_file_names):
+        skipped_files.append(file_path.name)
+        report_rows.append(
+            {
+                "filename": file_path.name,
+                "status": "skipped",
+                "size_bytes": sig["size"],
+                "size_gb": f"{size_gb:.4f}",
+                "mime_type": mime_type,
+                "uploaded_at": "",
+                "error": "Already uploaded or exists remotely",
+            }
+        )
         continue
 
     try:
-        result = upload_with_retries(client, dataset_identifier, zip_file)
+        result = upload_with_retries(client, dataset_identifier, file_path)
 
         uploaded_at = datetime.now(UTC).isoformat()
-        uploaded_files.append(zip_file.name)
+        uploaded_files.append(file_path.name)
 
-        manifest["uploaded_files"][zip_file.name] = {
+        manifest["uploaded_files"][file_path.name] = {
             **sig,
+            "mime_type": mime_type,
             "uploaded_at": uploaded_at,
             "dryad_response": result,
         }
 
-        manifest["failed_files"].pop(zip_file.name, None)
+        manifest["failed_files"].pop(file_path.name, None)
         save_manifest(manifest)
 
         logging.info("Upload complete")
@@ -273,21 +315,25 @@ for zip_file in zip_files:
         logging.info(f"Dryad file path: {result.get('path')}")
         logging.info(f"Dryad file size: {result.get('size')} bytes")
 
-        report_rows.append({
-            "filename": zip_file.name,
-            "status": "uploaded",
-            "size_bytes": sig["size"],
-            "size_gb": f"{size_gb:.4f}",
-            "uploaded_at": uploaded_at,
-            "error": "",
-        })
+        report_rows.append(
+            {
+                "filename": file_path.name,
+                "status": "uploaded",
+                "size_bytes": sig["size"],
+                "size_gb": f"{size_gb:.4f}",
+                "mime_type": mime_type,
+                "uploaded_at": uploaded_at,
+                "error": "",
+            }
+        )
 
     except Exception as e:
-        failed_files.append(zip_file.name)
+        failed_files.append(file_path.name)
         failed_at = datetime.now(UTC).isoformat()
 
-        manifest["failed_files"][zip_file.name] = {
+        manifest["failed_files"][file_path.name] = {
             **sig,
+            "mime_type": mime_type,
             "failed_at": failed_at,
             "error": str(e),
         }
@@ -295,17 +341,20 @@ for zip_file in zip_files:
         save_manifest(manifest)
 
         logging.error("Upload failed permanently")
-        logging.error(f"File: {zip_file.name}")
+        logging.error(f"File: {file_path.name}")
         logging.error(f"Error: {e}")
 
-        report_rows.append({
-            "filename": zip_file.name,
-            "status": "failed",
-            "size_bytes": sig["size"],
-            "size_gb": f"{size_gb:.4f}",
-            "uploaded_at": "",
-            "error": str(e),
-        })
+        report_rows.append(
+            {
+                "filename": file_path.name,
+                "status": "failed",
+                "size_bytes": sig["size"],
+                "size_gb": f"{size_gb:.4f}",
+                "mime_type": mime_type,
+                "uploaded_at": "",
+                "error": str(e),
+            }
+        )
 
 report_path = write_csv_report(report_rows)
 
@@ -314,7 +363,7 @@ logging.info("====================================")
 logging.info("Final summary")
 logging.info("====================================")
 logging.info(f"Dataset identifier: {dataset_identifier}")
-logging.info(f"Total files found: {len(zip_files)}")
+logging.info(f"Total files found: {len(files)}")
 logging.info(f"Uploaded this run: {len(uploaded_files)}")
 logging.info(f"Skipped: {len(skipped_files)}")
 logging.info(f"Failed: {len(failed_files)}")
