@@ -1,18 +1,32 @@
 # Dryad Zip Uploader
 
-Upload `.zip` files to a Dryad dataset **sequentially (one at a time)** with retries, logging, and safety checks.
+Robust Dryad uploader for large ZIP files with sequential uploads, retry logic, and resumable execution.
+
+---
+
+## ⚡ Quick Start
+
+```bash
+cp .env.example .env
+# edit .env with your credentials and dataset identifier
+
+python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+
+python scripts/create_dataset_and_upload_zips.py
+```
 
 ---
 
 ## 🚀 Features
 
-- Uploads multiple `.zip` files **one-by-one**
+- Uploads multiple `.zip` files **sequentially (one at a time)**
 - Progress bar for each upload
-- Automatic retries on failure
+- Automatic retries for transient failures
 - Skips already uploaded files (local + remote checks)
-- Dry-run mode (no uploads, preview only)
+- Dry-run mode for safe preview
 - Confirmation prompt before upload
-- Logs + CSV report output
+- Logging + CSV reporting
+- Resumable via manifest tracking
 
 ---
 
@@ -126,8 +140,8 @@ python scripts/create_dataset_and_upload_zips.py
 For each `.zip` file:
 
 1. Validates file
-2. Checks if already uploaded
-3. Uploads with progress bar
+2. Checks if already uploaded (local + Dryad)
+3. Uploads file with progress tracking
 4. Retries if needed
 5. Moves to next file
 
@@ -136,8 +150,6 @@ For each `.zip` file:
 ---
 
 ## 📊 Outputs
-
-After running, the script generates:
 
 ### Logs
 ```
@@ -167,10 +179,11 @@ file3.zip,failed,54321,0.05,,Error message
 
 ## 🛡️ Safety Features
 
-- Skips files already uploaded (local + Dryad)
-- Requires confirmation before uploading (optional)
+- Skips files already uploaded (local + remote)
+- Requires confirmation before uploading
 - Dry-run mode prevents accidental uploads
-- Retries transient failures automatically
+- Retries transient API/network failures
+- Tracks state via manifest for resumability
 - Does NOT submit dataset for curation
 
 ---
@@ -180,7 +193,8 @@ file3.zip,failed,54321,0.05,,Error message
 - Uploads are **not parallel**
 - Each file must complete before the next begins
 - Large files (10GB+) may take significant time
-- Retry logic helps recover from transient API/network issues
+- Retry logic handles transient Dryad/API inconsistencies
+- Dataset identifier must be URL-encoded (handled via `.env`)
 
 ---
 
@@ -200,10 +214,11 @@ rm -rf logs reports
 ### Authentication errors
 - Verify `.env` values
 - Ensure no extra spaces or quotes
+- Retry (transient failures are possible)
 
 ### Upload failures
 - Check logs: `logs/upload.log`
-- Retry will happen automatically
+- Retry logic will handle most cases automatically
 
 ### Files skipped unexpectedly
 - Check `upload_manifest.json`
