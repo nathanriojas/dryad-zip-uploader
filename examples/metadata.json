@@ -1,0 +1,14 @@
+{
+  "title": "Test Dryad API Upload 3",
+  "authors": [
+    {
+      "firstName": "Mikayla",
+      "lastName": "Eppert",
+      "email": "Mikayla.eppert@utsouthwestern.edu",
+      "affiliation": "The University of Texas Southwestern Medical Center"
+    }
+  ],
+  "abstract": "Test dataset created through the Dryad API.",
+  "keywords": ["Dryad", "API", "test"],
+  "fieldOfScience": "Biological Sciences"
+}

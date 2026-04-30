@@ -2,3 +2,14 @@
 .env
 __pycache__/
 *.pyc
+data/
+logs/
+upload_manifest.json
+.env
+.venv/
+data/
+logs/
+reports/
+upload_manifest.json
+__pycache__/
+*.pyc
